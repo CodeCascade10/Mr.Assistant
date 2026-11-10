@@ -12,6 +12,16 @@ client = OpenAI(
 
 messages =[]
 
+messages.append({
+    "role": "system",
+    "content": "You are a helpful assistant."
+})
+
+messages.append({
+    "role": "system",
+    "content": "Always respond in less than 100 words."
+})
+
 while True:
     user_input=input("user:")
     if user_input.lower() in  ["exit", "quit","goodbye", "bye"]:
