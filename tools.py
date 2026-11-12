@@ -93,6 +93,24 @@ def get_city_weather(city: str):
 
     return resp.text if resp.status_code == 200 else f"Error fetching weather for {city}: {resp.status_code}"
 
+import requests
+
+def get_user_city():
+    for url in ("https://ipapi.co/json/", "https://ipinfo.io/json"):
+        try:
+            r = requests.get(url, timeout=5)
+            r.raise_for_status()
+            d = r.json()
+            if d.get("city"):
+                return {
+                    "city": d.get("city"),
+                    "region": d.get("region"),
+                    "country": d.get("country_name") or d.get("country"),
+                }
+        except Exception:
+            continue
+    return "Unable to detect location."
+
 # TOOL DEFINITIONS FOR OPENAI FUNCTION CALLING
 tools = [
     {
@@ -175,6 +193,18 @@ tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_city",
+            "description": "Get the city of the user based on their IP address.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    }
 ]
 
 
@@ -186,6 +216,8 @@ def execute_tool(tool_name, arguments):
         "calculator": calculator,
         "search_files": search_files,
         "read_file": read_file,
+        "get_city_weather": get_city_weather,
+        "get_user_city": get_user_city
     }
 
     if tool_name not in available_functions:
@@ -201,5 +233,6 @@ FUNCTION_NAME_TO_FUNCTION_MAP ={
     "calculator": calculator,
     "search_files": search_files,
     "read_file": read_file,
-    "get_city_weather": get_city_weather
+    "get_city_weather": get_city_weather,
+    "get_user_city": get_user_city
 }
