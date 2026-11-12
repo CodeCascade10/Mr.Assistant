@@ -4,6 +4,8 @@ import ast
 import operator
 from datetime import datetime
 from pathlib import Path
+import requests
+
 
 
 # Project directory
@@ -85,6 +87,11 @@ def read_file(filename: str):
     except Exception as e:
         return f"Error reading file: {e}"
 
+def get_city_weather(city: str):
+    url= f"https://wttr.in/{city}?format=3"
+    resp= requests.get(url)
+
+    return resp.text if resp.status_code == 200 else f"Error fetching weather for {city}: {resp.status_code}"
 
 # TOOL DEFINITIONS FOR OPENAI FUNCTION CALLING
 tools = [
@@ -151,6 +158,23 @@ tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_city_weather",
+            "description": "Get the current weather for a specified city.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "Name of the city to get weather for."
+                    }
+                },
+                "required": ["city"],
+            },
+        },
+    },
 ]
 
 
@@ -177,4 +201,5 @@ FUNCTION_NAME_TO_FUNCTION_MAP ={
     "calculator": calculator,
     "search_files": search_files,
     "read_file": read_file,
+    "get_city_weather": get_city_weather
 }
