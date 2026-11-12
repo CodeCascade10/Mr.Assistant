@@ -1,25 +1,30 @@
-
-import os
 import ast
+import json
 import operator
+import os
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
+
 import requests
 
+from Utilities.utility import log
 
 
-# Project directory
 BASE_DIR = Path.cwd()
+SKIP_DIRS = {".venv", "venv", ".git", "__pycache__", "node_modules"}
 
 
-# TOOL 1: Get current date and time
+# ---------------------------------------------------------------------------
+# TOOLS
+# ---------------------------------------------------------------------------
+
 def get_current_datetime():
     return datetime.now().strftime("%A, %d %B %Y, %I:%M:%S %p")
 
 
-# TOOL 2: Calculator
 def calculator(expression: str):
-    allowed_operators = {
+    ops = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
         ast.Mult: operator.mul,
@@ -33,67 +38,67 @@ def calculator(expression: str):
     def evaluate(node):
         if isinstance(node, ast.Constant) and type(node.value) in (int, float):
             return node.value
-
-        if isinstance(node, ast.BinOp) and type(node.op) in allowed_operators:
-            return allowed_operators[type(node.op)](
-                evaluate(node.left), evaluate(node.right)
-            )
-
-        if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_operators:
-            return allowed_operators[type(node.op)](evaluate(node.operand))
-
+        if isinstance(node, ast.BinOp) and type(node.op) in ops:
+            left, right = evaluate(node.left), evaluate(node.right)
+            # Guard against expressions like 9**9**9 that would hang the program
+            if isinstance(node.op, ast.Pow) and abs(right) > 1000:
+                raise ValueError("Exponent too large")
+            return ops[type(node.op)](left, right)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in ops:
+            return ops[type(node.op)](evaluate(node.operand))
         raise ValueError("Invalid mathematical expression")
 
     try:
-        tree = ast.parse(expression, mode="eval")
-        return evaluate(tree.body)
+        if len(expression) > 200:
+            return "Calculation error: expression too long"
+        return evaluate(ast.parse(expression.strip(), mode="eval").body)
     except Exception as e:
         return f"Calculation error: {e}"
 
 
-# TOOL 3: Search files
 def search_files(keyword: str):
+    keyword = keyword.lower()
     results = []
 
-    for path in BASE_DIR.rglob("*"):
-        if not path.is_file():
-            continue
+    # os.walk lets us prune .venv/.git up front instead of walking into them
+    for root, dirs, files in os.walk(BASE_DIR):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for name in files:
+            if keyword in name.lower():
+                results.append(str((Path(root) / name).relative_to(BASE_DIR)))
+                if len(results) >= 30:
+                    return results
 
-        if any(part in {".venv", ".git", "__pycache__"} for part in path.parts):
-            continue
-
-        if keyword.lower() in path.name.lower():
-            results.append(str(path.relative_to(BASE_DIR)))
-
-    return results[:30]
+    return results or "No matching files found."
 
 
-# TOOL 4: Read a text file
 def read_file(filename: str):
     try:
         path = (BASE_DIR / filename).resolve()
 
         if not path.is_relative_to(BASE_DIR.resolve()):
             return "Access denied: file is outside the project directory."
-
+        if path.name.startswith(".env"):
+            return "Access denied: this file contains secrets."
         if not path.is_file():
             return "File not found."
-
         if path.stat().st_size > 100_000:
             return "File is too large to read."
 
         return path.read_text(encoding="utf-8")
-
     except Exception as e:
         return f"Error reading file: {e}"
 
+
 def get_city_weather(city: str):
-    url= f"https://wttr.in/{city}?format=3"
-    resp= requests.get(url)
+    try:
+        resp = requests.get(f"https://wttr.in/{quote(city)}?format=3", timeout=10)
+        if resp.status_code == 200:
+            return resp.text.strip()
+        return f"Error fetching weather for {city}: {resp.status_code}"
+    except Exception as e:
+        return f"Error fetching weather for {city}: {e}"
 
-    return resp.text if resp.status_code == 200 else f"Error fetching weather for {city}: {resp.status_code}"
-
-import requests
 
 def get_user_city():
     for url in ("https://ipapi.co/json/", "https://ipinfo.io/json"):
@@ -111,128 +116,128 @@ def get_user_city():
             continue
     return "Unable to detect location."
 
-# TOOL DEFINITIONS FOR OPENAI FUNCTION CALLING
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_current_datetime",
-            "description": "Get the current date and time.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "calculator",
-            "description": "Calculate mathematical expressions.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "Mathematical expression to calculate."
-                    }
-                },
-                "required": ["expression"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_files",
-            "description": "Search for files inside the project directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keyword": {
-                        "type": "string",
-                        "description": "Filename keyword to search."
-                    }
-                },
-                "required": ["keyword"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a text file inside the project directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": "Relative path of the file."
-                    }
-                },
-                "required": ["filename"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_city_weather",
-            "description": "Get the current weather for a specified city.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "Name of the city to get weather for."
-                    }
-                },
-                "required": ["city"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_user_city",
-            "description": "Get the city of the user based on their IP address.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    }
-]
 
-
-# TOOL EXECUTOR
-def execute_tool(tool_name, arguments):
-
-    available_functions = {
-        "get_current_datetime": get_current_datetime,
-        "calculator": calculator,
-        "search_files": search_files,
-        "read_file": read_file,
-        "get_city_weather": get_city_weather,
-        "get_user_city": get_user_city
-    }
-
-    if tool_name not in available_functions:
-        return "Tool not found."
-
-    try:
-        return available_functions[tool_name](**arguments)
-    except Exception as e:
-        return f"Tool execution error: {e}"
-
-FUNCTION_NAME_TO_FUNCTION_MAP ={
+TOOL_FUNCTIONS = {
     "get_current_datetime": get_current_datetime,
     "calculator": calculator,
     "search_files": search_files,
     "read_file": read_file,
     "get_city_weather": get_city_weather,
-    "get_user_city": get_user_city
+    "get_user_city": get_user_city,
 }
+
+
+# ---------------------------------------------------------------------------
+# TOOL DEFINITIONS (sent to the LLM)
+# ---------------------------------------------------------------------------
+
+def _tool(name, description, properties=None, required=None):
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties or {},
+                "required": required or [],
+            },
+        },
+    }
+
+
+tools = [
+    _tool("get_current_datetime", "Get the current date and time."),
+    _tool(
+        "calculator",
+        "Calculate mathematical expressions.",
+        {"expression": {"type": "string", "description": "Mathematical expression to calculate."}},
+        ["expression"],
+    ),
+    _tool(
+        "search_files",
+        "Search for files inside the project directory.",
+        {"keyword": {"type": "string", "description": "Filename keyword to search."}},
+        ["keyword"],
+    ),
+    _tool(
+        "read_file",
+        "Read a text file inside the project directory.",
+        {"filename": {"type": "string", "description": "Relative path of the file."}},
+        ["filename"],
+    ),
+    _tool(
+        "get_city_weather",
+        "Get the current weather for a specified city.",
+        {"city": {"type": "string", "description": "Name of the city to get weather for."}},
+        ["city"],
+    ),
+    _tool("get_user_city", "Get the city of the user based on their IP address."),
+]
+
+
+# ---------------------------------------------------------------------------
+# TOOL EXECUTION (everything ai_assistant.py needs)
+# ---------------------------------------------------------------------------
+
+def execute_tool(tool_name, arguments):
+    func = TOOL_FUNCTIONS.get(tool_name)
+    if func is None:
+        return f"Tool not found: {tool_name}"
+    if not isinstance(arguments, dict):
+        return "Invalid tool arguments."
+    try:
+        return func(**arguments)
+    except Exception as e:
+        return f"Tool execution error: {e}"
+
+
+def run_tool_call(tool_call):
+    """Run one tool call from the LLM and return the result as a string."""
+    name = tool_call.function.name
+    try:
+        args = json.loads(tool_call.function.arguments or "{}")
+    except json.JSONDecodeError:
+        args = None
+
+    result = execute_tool(name, args)
+    if not isinstance(result, str):
+        result = json.dumps(result, default=str)
+
+    log(f"Tool called: {name} {args}")
+    log(f"Tool result: {result[:200]}")
+    return result
+
+
+
+def add_tool_results(messages, msg, override_result=None):
+    """Append tool requests and their execution results to conversation history."""
+
+    messages.append({
+        "role": "assistant",
+        "content": msg.content or "",
+        "tool_calls": [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments or "{}"
+                }
+            }
+            for tc in msg.tool_calls
+        ]
+    })
+
+    for tc in msg.tool_calls:
+
+        if override_result is not None:
+            result = override_result
+        else:
+            result = run_tool_call(tc)
+
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tc.id,
+            "content": str(result)
+        })
