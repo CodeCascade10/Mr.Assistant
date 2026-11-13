@@ -10,6 +10,8 @@ from openai import OpenAI
 from Utilities.utility import log
 from tools import tools, add_tool_results
 
+from types import SimpleNamespace
+
 
 # --------------------------------------------------
 # CONFIGURATION
@@ -31,7 +33,7 @@ if not all([MODEL, BASE_URL, API_KEY]):
 client = OpenAI(
     base_url=BASE_URL,
     api_key=API_KEY,
-    timeout=180.0,
+    timeout=360.0,
     max_retries=0
 )
 
@@ -48,14 +50,11 @@ messages = [
     {
         "role": "system",
         "content": (
-            "You are a helpful AI assistant. "
-            "Always respond in less than 100 words. "
-            "Use available tools when necessary. "
-            "If the user asks about weather without naming a city, "
-            "first call get_user_city, then call get_city_weather "
-            "using the detected city. "
-            "If the user specifies a city, call get_city_weather directly. "
-            "After receiving tool results, explain them clearly. "
+            "You are a helpful general-purpose AI assistant. "
+            "Answer general knowledge questions using your own knowledge. "
+            "Use available tools whenever they are needed. "
+            "Never claim that you cannot answer simply because a tool is unavailable. "
+            "Always respond in less than 100 words. " 
             "/no_think"
         )
     }
@@ -71,32 +70,133 @@ def ask_llm(allow_tools=True):
     request_data = {
         "model": MODEL,
         "messages": messages,
+        "stream": True
     }
 
     if allow_tools:
         request_data["tools"] = tools
         request_data["tool_choice"] = "auto"
 
-    log(f"Sending LLM request | Tools enabled: {allow_tools}")
+    log(f"Sending streaming LLM request | Tools: {allow_tools}")
 
     start_time = time.time()
 
+    content = ""
+    tool_calls = {}
+    tool_headers_printed = set()
+    argument_headers_printed = set()
+
     try:
-        response = client.chat.completions.create(**request_data)
+        stream = client.chat.completions.create(**request_data)
 
-        elapsed = time.time() - start_time
-        msg = response.choices[0].message
+        for chunk in stream:
 
-        log(f"LLM response received in {elapsed:.2f} seconds")
-        log(f"Tool calls requested: {len(msg.tool_calls or [])}")
-        log(f"Response content: {msg.content or ''}")
+            delta = chunk.choices[0].delta
+
+            # ----------------------------------
+            # STREAM NORMAL RESPONSE
+            # ----------------------------------
+
+            if delta.content:
+                content += delta.content
+                print(delta.content, end="", flush=True)
+
+            # ----------------------------------
+            # STREAM TOOL CALLS
+            # ----------------------------------
+
+            if delta.tool_calls:
+
+                for tool in delta.tool_calls:
+
+                    index = tool.index
+
+                    if index not in tool_calls:
+                        tool_calls[index] = {
+                            "id": "",
+                            "name": "",
+                            "arguments": ""
+                        }
+
+                    current = tool_calls[index]
+
+                    if tool.id:
+                        current["id"] = tool.id
+
+                    if tool.function:
+
+                        # Stream function name
+                        if tool.function.name:
+
+                            if index not in tool_headers_printed:
+                                print(
+                                    f"\n\n[Tool Call {index + 1}]",
+                                    flush=True
+                                )
+                                print("Function: ", end="", flush=True)
+                                tool_headers_printed.add(index)
+
+                            current["name"] += tool.function.name
+
+                            print(
+                                tool.function.name,
+                                end="",
+                                flush=True
+                            )
+
+                        # Stream function arguments
+                        if tool.function.arguments:
+
+                            if index not in argument_headers_printed:
+                                print("\nArguments: ", end="", flush=True)
+                                argument_headers_printed.add(index)
+
+                            current["arguments"] += tool.function.arguments
+
+                            print(
+                                tool.function.arguments,
+                                end="",
+                                flush=True
+                            )
+
+        formatted_calls = []
+
+        for call in tool_calls.values():
+
+            formatted_calls.append(
+                SimpleNamespace(
+                    id=call["id"],
+                    function=SimpleNamespace(
+                        name=call["name"],
+                        arguments=call["arguments"]
+                    )
+                )
+            )
+
+        if formatted_calls:
+            print("\n\n[Tool calls received completely]", flush=True)
+
+        msg = SimpleNamespace(
+            content=content,
+            tool_calls=formatted_calls
+        )
+
+        log(
+            f"Streaming completed in "
+            f"{time.time() - start_time:.2f}s"
+        )
+
+        log(f"Tool calls received: {len(formatted_calls)}")
 
         return msg
 
     except Exception as e:
-        elapsed = time.time() - start_time
-        log(f"LLM request failed after {elapsed:.2f} seconds")
-        log(f"LLM error: {type(e).__name__}: {e}")
+
+        log(
+            f"Streaming request failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
         raise
 
 

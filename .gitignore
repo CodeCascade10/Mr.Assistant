@@ -35,3 +35,5 @@ htmlcov/
 *.sqlite3
 
 test_llm.py
+stream_test.py
+stream_tools_test.py
